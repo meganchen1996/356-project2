@@ -1,19 +1,11 @@
 import sys
-import time
-import collections
 import ipaddress
 from socket import *
 
 clientPort = 6930
 
 #routing table 
-routing_table = collections.OrderedDict();
-
-#routing table engine server
-
-#longest prefix match rule (longer prefix wins) assuming they are equal or lesser cost.
-#ex. a /16 that matches is overriden by a /24 that matches, but if the /24 is more expensive, 
-# your table should still prefer the /16
+routing_table = dict();
 
 #set up of server
 def run_server():
@@ -21,6 +13,11 @@ def run_server():
 	serverPort = int(sys.argv[1])
 	serverSocket.bind(('',serverPort))
 	serverSocket.listen(1)
+
+	#initialize routing_table
+	#key: subnet
+	#value: router prefix cost
+	routing_table['0.0.0.0'] = "A 0 100"
 
 	while 1:
 		clientSocket, port = serverSocket.accept()
@@ -42,15 +39,6 @@ def parse_request(message):
 	else:
 		return 'NOTHING'
 
-#construct response
-#headers you need: server, date, content-type, content-length, last-modified
-def generate_response(command):
-	tnow = time.gmtime()
-	tnowstr = time.strftime('%a, %d %b %Y %H:%M:%S %Z', tnow)
-	response = ''
-	return response
-
-
 #update - receive messages updating routing information
 #Example request for an UPDATE command
 # UPDATE <cr><lf>
@@ -60,23 +48,34 @@ def generate_response(command):
 # C<sp>200.34.0.0/16<sp>41<cr><lf>
 # END<cr><lf
 def update(body):
-	# check the table to see if the advertised path receieved is better than the one stored
-	# if it is better, then update it
-	# call generate response
 	i = 1;
+	#iterate through the different requests in the body
 	while(body[i] != 'END'):
 		body_request = body[i].split(' ')
-		router = body_request[0]
-		subnet = body_request[1]
-		cost = body_request[2]
-		#check if it already exists and if it's more expensive
-		key = router + ' ' + subnet;
-		if(key in routing_table):
-			if (routing_table[key] <= cost):
-				routing_table[key] = cost
-		#else just add it in
+		req_router = body_request[0]
+		req_subnet = body_request[1]
+		req_prefix = (req_subnet.split('/'))[1]
+		req_cost = body_request[2]
+
+		#check if requested subnet already has an entry in the table
+		if(req_subnet in routing_table):
+			entry_router = (routing_table[req_subnet].split(' '))[0] 
+			entry_prefix = (routing_table[req_subnet].split(' '))[1]
+			entry_cost = (routing_table[req_subnet].split(' '))[2]
+			#if the request is less expensive, replace with its information
+			if (int(req_cost) < int(entry_cost)):
+				routing_table[req_subnet] = req_router + ' ' + req_prefix + ' ' + req_cost
+			#if cost is equal
+			elif (int(req_cost) == int(entry_cost)):
+				#check if prefix is longer or equal
+				if(req_prefix_is_longer_or_equal(entry_prefix, req_prefix)):
+					routing_table[req_subnet] = req_router + ' ' + req_prefix + ' ' + req_cost
+			
+			#if was more expensive, or cost was same but prefix was shorter, then quit out without changing
+
+		#else doesn't exist, so just add it in
 		else:
-			routing_table[key] = cost
+			routing_table[req_subnet] = req_router + ' ' + req_prefix + ' ' + req_cost
 		i+=1
 
 	response = 'ACK\r\nEND\r\n'
@@ -86,16 +85,40 @@ def update(body):
 def query(body):
 	#get ip address
 	ip = body[1]
-	#iterate through to check if the ip is within a subnet
-	for key, cost in routing_table.items():
-		key_split = key.split(' ')
-		router = key[0]
-		subnet = key[1]
-		if(ipaddress.ip_address(ip) in ipaddress.ip_network(subnet)):
-			response = 'RESULT\r\n' + ip + ' ' + router + ' ' + cost + '\r\n' + 'END\r\n'
-			return response
-	return 'QUERY'
 
-def subnet_is_better(best, new):
-	if()
+	best = routing_table['0.0.0.0']; #initial 
+	best_split = best.split(' ')
+	best_router = best_split[0]
+	best_prefix = best_split[1]
+	best_cost = best_split[2]
+
+	#iterate through to check if the ip is within a subnet
+	for subnet, value in routing_table.items():
+		value_split = value.split(' ')
+		entry_router = value_split[0]
+		entry_prefix = value_split[1]
+		entry_cost = value_split[2]
+
+		# is the ip address within the subnet?
+		if(ipaddress.ip_address(ip) in ipaddress.ip_network(subnet)):
+			#check if it's less expensive than the current best
+			if(int(entry_cost) < int(best_cost)): 
+				best = routing_table[subnet]
+			elif(int(entry_cost) == int(best_cost)):
+				if(req_prefix_is_longer_or_equal(best_prefix, entry_prefix)):
+					best = routing_table[subnet]
+
+			best_split = best.split(' ')
+			best_router = best_split[0]
+			best_prefix = best_split[1]
+			best_cost = best_split[2]
+
+	response = 'RESULT\r\n' + ip + ' ' + best_router + ' ' + best_cost + '\r\n' + 'END\r\n'
+	return response;
+
+def req_prefix_is_longer_or_equal(entry, req):
+	if(int(req) >= int(entry)):
+		return True;
+	return False;
+
 run_server()
